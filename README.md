@@ -33,42 +33,121 @@ For each file with findings it:
 Dry run is the default: you get a diff. `--apply` writes the files; the Action opens a pull request and never pushes
 to your branch.
 
-## Quick start (GitHub Action)
+## Step-by-step: add the fixer to your agent project
 
-```yaml
-# .github/workflows/agentic-top10-fix.yml
-name: Agentic Top 10 Fix
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 4 * * 1"   # weekly
+Route A runs on GitHub and opens a pull request with the fixes. Route B runs on your own computer and edits your
+local copy. Both work with Claude, with your own self-hosted model, or with no AI at all (mechanical codemods only).
 
-permissions:
-  contents: write         # push the fix branch
-  pull-requests: write    # open the pull request
+### A. On GitHub (opens a pull request)
 
-jobs:
-  fix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Adyanullah-Khan/agentic-top10-fix@v0.1.0   # pin to a commit SHA in production
-        with:
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          min-severity: medium
-```
+1. **Get a Claude API key.** Go to [console.anthropic.com](https://console.anthropic.com), open **API keys**,
+   click **Create key**, and copy it (it's shown only once). Skip this step if you'll use your own model or no AI;
+   see "Using your own model" below.
+2. **Store the key in your repository.** In your agent's repository, open **Settings → Secrets and variables →
+   Actions → New repository secret**. Set *Name* to `ANTHROPIC_API_KEY`, paste the key into *Secret*, and click
+   **Add secret**. The key is never shown in logs.
+3. **Allow Actions to open pull requests.** Open **Settings → Actions → General**, scroll to *Workflow permissions*,
+   tick **Allow GitHub Actions to create and approve pull requests**, and click **Save**. In an organisation, an
+   owner may have to allow this at the organisation level first.
+4. **Create the workflow file.** Click **Add file → Create new file**, name it
+   `.github/workflows/agentic-top10-fix.yml`, and paste:
 
-Two repository settings matter:
+   ```yaml
+   name: Agentic Top 10 Fix
+   on:
+     workflow_dispatch:          # adds a "Run workflow" button
+     schedule:
+       - cron: "0 4 * * 1"       # also every Monday 04:00 UTC
 
-- **Allow pull requests from Actions.** Turn on *Settings → Actions → General → Allow GitHub Actions to create and
-  approve pull requests*.
-- **Workflow files are skipped by default.** The default `GITHUB_TOKEN` can't push changes to `.github/workflows`.
-  To fix those too, pass a token with the `workflow` scope as `github-token` and set `include-workflows: true`.
+   permissions:
+     contents: write             # push the branch with the fixes
+     pull-requests: write        # open the pull request
 
-Don't run this on `pull_request_target` or on untrusted forks. It sends repository code to the LLM and holds a
-token that can write.
+   jobs:
+     fix:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+         - uses: Adyanullah-Khan/agentic-top10-fix@v0.1.0
+           with:
+             anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+             min-severity: medium   # start with the important findings
+             max-llm-calls: "20"    # cost cap per run
+   ```
 
-## Command line
+5. **Save it.** Click **Commit changes…** and then **Commit changes**.
+6. **Run it.** Open the **Actions** tab, select **Agentic Top 10 Fix** on the left, and click **Run workflow →
+   Run workflow**. A run takes a few minutes, depending on how many files need AI fixes.
+7. **Check the summary.** Open the run and scroll down. It lists what was fixed, what is still open and why, and
+   what needs a decision from you.
+8. **Review the pull request.** Open the **Pull requests** tab and click **Fix agentic security findings**:
+   - Read the description. It lists every fix, plus notes from the model about anything you should check.
+   - Open **Files changed** and look at each change, especially new constants such as allowlists, root folders or
+     limits. Adjust them to your setup by editing the files in the pull request.
+   - Let your tests run on the pull request, then **Merge**. Or close it if you don't want the changes.
+9. **Confirm.** If you also use [Agentic Top 10 Scan](https://github.com/Adyanullah-Khan/agentic-top10-scan), its
+   next run on `main` shows the fixed findings gone.
+
+**No AI at all:** replace the `anthropic-api-key` line with `provider: none`. Only the mechanical codemods run, no
+code leaves GitHub, and no secret is needed.
+
+**Using your own model (for example on your own server):** GitHub's machines can't reach a server inside your home or
+office network. Run the job on a machine that can:
+
+1. In your repository, open **Settings → Actions → Runners → New self-hosted runner**, and run the commands it shows
+   on a computer on the same network as your model server.
+2. In the workflow, change `runs-on: ubuntu-latest` to `runs-on: self-hosted`, and replace the `with:` block with:
+
+   ```yaml
+           with:
+             provider: openai                          # any OpenAI-compatible server
+             base-url: http://my-model-server:8000/v1  # vLLM; Ollama uses port 11434
+             model: llama3.1:70b                       # the model name your server serves
+             min-severity: medium
+   ```
+
+   If your server needs a key, store it as a secret and add `openai-api-key: ${{ secrets.MODEL_API_KEY }}`.
+
+**Good to know:**
+
+- Workflow files under `.github/workflows` are left alone by default, because the standard token can't push changes
+  to them. To include them, pass a personal access token with the `workflow` scope as `github-token` and set
+  `include-workflows: true`.
+- Don't trigger this workflow from `pull_request_target` or from forks. It sends code to the model and holds a token
+  that can write to your repository.
+
+### B. On your computer
+
+1. **Check Python.** Run `python3 --version`; you need 3.10 or newer.
+2. **Install the fixer** (it installs the scanner too):
+
+   ```bash
+   pip install "agentic-top10-fix[anthropic] @ git+https://github.com/Adyanullah-Khan/agentic-top10-fix@v0.1.0"
+   ```
+
+3. **Choose the model.**
+   - **Claude:** `export ANTHROPIC_API_KEY="your-key-here"` on macOS/Linux, or
+     `$env:ANTHROPIC_API_KEY="your-key-here"` in Windows PowerShell.
+   - **Your own model:** nothing to set now; you'll pass `--base-url` and `--model` in step 5.
+   - **No AI:** add `--provider none` to the commands below.
+4. **Go to your agent project and save your work:** `cd path/to/your-agent`, then commit any changes so that
+   `git status` is clean. That way every fix can be reviewed and undone with git.
+5. **Preview the fixes (nothing is written yet):**
+
+   ```bash
+   agentic-top10-fix .
+   # with your own model:
+   agentic-top10-fix . --base-url http://my-model-server:11434/v1 --model llama3.1:70b
+   ```
+
+   You'll see a diff of every proposed change, then a summary of what is fixed, open, and needs a decision.
+6. **Apply them:** run `agentic-top10-fix . --apply`. Add `--verify-cmd "pytest -q"` to automatically drop any
+   file's fix that makes your tests fail.
+7. **Review and commit.** Look at `git diff`, run your tests, and commit. To undo everything instead, run
+   `git checkout -- .`.
+8. **Re-scan to confirm:** `agentic-top10 .`
+
+## Command-line reference
 
 ```bash
 pip install "agentic-top10-fix[anthropic] @ git+https://github.com/Adyanullah-Khan/agentic-top10-fix@v0.1.0"
