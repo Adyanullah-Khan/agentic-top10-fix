@@ -1,0 +1,37 @@
+# Copy to .github/workflows/agentic-top10.yml: scan on every push/PR, fix weekly via a pull request.
+name: Agentic Top 10
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Adyanullah-Khan/agentic-top10-scan@v0.1.0 # replace with the release commit SHA
+
+  fix:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Adyanullah-Khan/agentic-top10-fix@v0.1.0 # replace with the release commit SHA
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          min-severity: medium
+          max-llm-calls: "20"

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-top10-fix"
+version = "0.1.0"
+description = "Turns agentic-top10-scan findings into verified code fixes: deterministic codemods plus LLM patches, re-scanned before they are kept."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Adyanullah Khan" }]
+requires-python = ">=3.10"
+dependencies = [
+  "agentic-top10-scan @ git+https://github.com/Adyanullah-Khan/agentic-top10-scan@v0.1.0",
+]
+keywords = ["security", "ai-agents", "llm", "owasp", "auto-remediation", "claude"]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=1.11,<2"]
+test = ["pytest>=7", "anthropic>=1.11,<2"]
+
+[project.scripts]
+agentic-top10-fix = "agentic_top10_fix.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Adyanullah-Khan/agentic-top10-fix"
+Scanner = "https://github.com/Adyanullah-Khan/agentic-top10-scan"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

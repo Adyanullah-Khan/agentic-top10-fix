@@ -1,0 +1,150 @@
+name: Agentic Top 10 Fix
+description: Turns Agentic Top 10 Scan findings into verified fixes (codemods + Claude) and opens a pull request for review.
+author: Adyanullah Khan
+branding:
+  icon: tool
+  color: purple
+
+inputs:
+  path:
+    description: Project directory to fix, relative to the repository root.
+    default: "."
+  scan-report:
+    description: An existing agentic-top10-scan JSON or SARIF report. Leave empty to run the scanner here.
+    default: ""
+  provider:
+    description: "LLM backend: auto, anthropic, openai (any OpenAI-compatible endpoint) or none (codemods only)."
+    default: auto
+  model:
+    description: Model name. Defaults to claude-opus-5-5 (anthropic) or gpt-4o (openai).
+    default: ""
+  base-url:
+    description: OpenAI-compatible base URL, e.g. a self-hosted vLLM or Ollama server.
+    default: ""
+  anthropic-api-key:
+    description: Anthropic API key (pass a secret). Code from this repository is sent to the Claude API.
+    default: ""
+  openai-api-key:
+    description: API key for the OpenAI-compatible endpoint (pass a secret).
+    default: ""
+  min-severity:
+    description: Only fix findings at or above this severity.
+    default: low
+  rules:
+    description: Comma-separated rule IDs to fix (default all).
+    default: ""
+  max-rounds:
+    description: LLM attempts per file.
+    default: "3"
+  max-llm-calls:
+    description: LLM calls for the whole run (cost cap).
+    default: "30"
+  online:
+    description: Allow lookups that pin versions (npm/PyPI) and action commit SHAs (GitHub API).
+    default: "true"
+  include-workflows:
+    description: Also fix .github/workflows files. The default GITHUB_TOKEN cannot push workflow changes; this needs a token with the workflow scope.
+    default: "false"
+  verify-command:
+    description: Command run after each patched file (e.g. "pytest -q"); a patch that makes it fail is dropped. Executes repository code.
+    default: ""
+  create-pr:
+    description: Open a pull request with the fixes.
+    default: "true"
+  branch:
+    description: Branch name for the pull request.
+    default: ""
+  github-token:
+    description: Token used to push the branch and open the pull request.
+    default: ${{ github.token }}
+  python-version:
+    description: Python version used to run the fixer (3.10+).
+    default: "3.12"
+
+outputs:
+  files-changed:
+    description: Number of files changed.
+    value: ${{ steps.fix.outputs.files-changed }}
+  fixed-count:
+    description: Number of findings fixed.
+    value: ${{ steps.fix.outputs.fixed-count }}
+  pr-url:
+    description: URL of the pull request, if one was opened.
+    value: ${{ steps.pr.outputs.pr-url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Agentic Top 10 Fix
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        python -m venv "$RUNNER_TEMP/agentic-top10-fix-venv"
+        "$RUNNER_TEMP/agentic-top10-fix-venv/bin/python" -m pip install --quiet --disable-pip-version-check "${ACTION_PATH}[anthropic]"
+
+    - name: Fix findings
+      id: fix
+      shell: bash
+      env:
+        FIX_PATH: ${{ inputs.path }}
+        SCAN_REPORT: ${{ inputs.scan-report }}
+        PROVIDER: ${{ inputs.provider }}
+        MODEL: ${{ inputs.model }}
+        BASE_URL: ${{ inputs.base-url }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        MIN_SEVERITY: ${{ inputs.min-severity }}
+        RULES: ${{ inputs.rules }}
+        MAX_ROUNDS: ${{ inputs.max-rounds }}
+        MAX_LLM_CALLS: ${{ inputs.max-llm-calls }}
+        ONLINE: ${{ inputs.online }}
+        INCLUDE_WORKFLOWS: ${{ inputs.include-workflows }}
+        VERIFY_COMMAND: ${{ inputs.verify-command }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+        [ -n "$OPENAI_API_KEY" ] || unset OPENAI_API_KEY
+        args=("$FIX_PATH" --apply --quiet --provider "$PROVIDER" --min-severity "$MIN_SEVERITY"
+              --max-rounds "$MAX_ROUNDS" --max-llm-calls "$MAX_LLM_CALLS"
+              --report-md "$RUNNER_TEMP/agentic-top10-fix.md" --report-json "$RUNNER_TEMP/agentic-top10-fix.json")
+        if [ -n "$SCAN_REPORT" ]; then args+=(--report "$SCAN_REPORT"); fi
+        if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
+        if [ -n "$BASE_URL" ]; then args+=(--base-url "$BASE_URL"); fi
+        if [ -n "$RULES" ]; then args+=(--rules "$RULES"); fi
+        if [ "$ONLINE" = "true" ]; then args+=(--online); fi
+        if [ "$INCLUDE_WORKFLOWS" != "true" ]; then args+=(--no-workflows); fi
+        if [ -n "$VERIFY_COMMAND" ]; then args+=(--verify-cmd "$VERIFY_COMMAND"); fi
+        "$RUNNER_TEMP/agentic-top10-fix-venv/bin/agentic-top10-fix" "${args[@]}"
+        cat "$RUNNER_TEMP/agentic-top10-fix.md" >> "$GITHUB_STEP_SUMMARY"
+        "$RUNNER_TEMP/agentic-top10-fix-venv/bin/python" - "$RUNNER_TEMP/agentic-top10-fix.json" >> "$GITHUB_OUTPUT" <<'PY'
+        import json, sys
+        s = json.load(open(sys.argv[1]))["summary"]
+        print(f"files-changed={s['files_changed']}")
+        print(f"fixed-count={s['fixed']}")
+        PY
+
+    - name: Open pull request
+      id: pr
+      if: inputs.create-pr == 'true' && steps.fix.outputs.files-changed != '0'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        BRANCH: ${{ inputs.branch }}
+        BASE: ${{ github.base_ref || github.ref_name }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        branch="${BRANCH:-agentic-top10-fix/$RUN_ID}"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git checkout -b "$branch"
+        git add -u
+        git commit -m "Fix agentic security findings (Agentic Top 10 Fix)" -m "Automated fixes verified by re-scanning; review before merging."
+        git push origin "$branch"
+        url="$(gh pr create --base "$BASE" --head "$branch" --title "Fix agentic security findings" --body-file "$RUNNER_TEMP/agentic-top10-fix.md")"
+        echo "pr-url=$url" >> "$GITHUB_OUTPUT"
+        echo "Opened $url"
